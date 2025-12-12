@@ -203,14 +203,44 @@ app.post("/add-goat", async (req, res) => {
 });
 
 app.get("/get-goats/:userId", async (req, res) => {
+  console.log("\n--- GET GOATS REQUEST ---");
+
   try {
     const { userId } = req.params;
-    // Find goats belonging to this user, sort by newest first
-    const goats = await Goat.find({ owner: userId }).sort({ addedAt: -1 });
+    console.log(`🔍 Fetching herd for Owner ID: ${userId}`);
+
+    // Aggregate: Join Goats with Images
+    const goats = await Goat.aggregate([
+      // 1. Match goats belonging to this user
+      { $match: { owner: new mongoose.Types.ObjectId(userId) } },
+      
+      // 2. Sort by newest first
+      { $sort: { addedAt: -1 } },
+
+      // 3. Lookup: Go to "images" collection, find images where local "_id" matches foreign "goatId"
+      {
+        $lookup: {
+          from: "images", // The collection name in MongoDB (usually lowercase plural of model)
+          localField: "_id",
+          foreignField: "goatId",
+          as: "goatImages" // The result array
+        }
+      },
+
+      // 4. Add a field called 'mainPhoto' that takes the first image from the array (if any)
+      {
+        $addFields: {
+          mainPhoto: { $arrayElemAt: ["$goatImages.imageUrl", 0] } // Get URL of first image
+        }
+      },
+
+      // 5. Cleanup: Remove the heavy array of all images to keep payload light
+      { $project: { goatImages: 0 } }
+    ]);
     
-    // Optional: You might want to fetch the "main photo" for each goat here too
-    // For now, we will just return the goat data
+    console.log(`✅ Found ${goats.length} goats.`); 
     res.status(200).json(goats);
+
   } catch (err) {
     console.error("❌ Error fetching goats:", err);
     res.status(500).json({ error: err.message });
