@@ -98,6 +98,7 @@ app.post("/login", async (req, res) => {
     }
 });
 
+// C. ADD OR UPDATE GOAT (With Image Replacement)
 app.post("/add-goat", async (req, res) => {
   console.log("\n--- ADD/UPDATE GOAT REQUEST ---");
 
@@ -110,52 +111,55 @@ app.post("/add-goat", async (req, res) => {
 
     console.log(`📦 Processing: ${name} (${rfidTag})`);
 
-    // 1. FIND & UPDATE (or CREATE if not exists)
-    // We search by 'rfidTag'. If found, we update the fields. If not, we create it.
+    // 1. FIND & UPDATE (or CREATE)
     const goat = await Goat.findOneAndUpdate(
-      { rfidTag: rfidTag }, // Search Query
+      { rfidTag: rfidTag }, 
       {
         $set: {
-          owner,        // Updates owner (useful if ownership changes)
-          name,
-          gender,
-          breed,
-          birthDate,
-          weight,       // Updates to latest weight
-          height,       // Updates to latest height
-          healthStatus, // Updates health tags
-          addedAt: Date.now() // Optional: Update timestamp to show "Last Modified"
+          owner, name, gender, breed, birthDate, weight, height, healthStatus,
+          addedAt: Date.now() 
         }
       },
-      { 
-        new: true,              // Return the updated document, not the old one
-        upsert: true,           // Create if it doesn't exist
-        setDefaultsOnInsert: true // Apply schema defaults (like default healthStatus)
-      }
+      { new: true, upsert: true, setDefaultsOnInsert: true }
     );
 
     console.log(`✅ Goat Processed! ID: ${goat._id}`);
 
-    // 2. Process Images (Always ADD new images, never delete old ones)
-    // This allows you to build a history of photos over time.
+    // 2. CLEANUP: Delete Old Images (If we are uploading new ones)
     if (photos && photos.length > 0) {
+      console.log("🧹 Cleaning up old images...");
+      
+      // A. Find old image records for this goat
+      const oldImages = await Image.find({ goatId: goat._id });
+
+      // B. Delete actual files from the 'uploads' folder
+      oldImages.forEach((img) => {
+        const filePath = path.join(__dirname, "uploads", img.filename);
+        if (fs.existsSync(filePath)) {
+          fs.unlinkSync(filePath); // Delete file
+        }
+      });
+
+      // C. Delete records from MongoDB
+      await Image.deleteMany({ goatId: goat._id });
+      console.log(`🗑️ Deleted ${oldImages.length} old images.`);
+
+      // 3. SAVE NEW IMAGES
       console.log(`📸 Saving ${photos.length} new images...`);
       
       const imagePromises = photos.map(async (base64String, index) => {
         // Strip header
         const matches = base64String.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
-        
         if (!matches || matches.length !== 3) return null;
 
         const imageBuffer = Buffer.from(matches[2], 'base64');
-        // Unique filename: Timestamp + GoatID + Index
         const filename = `${Date.now()}_${goat._id}_img${index}.jpg`;
         const filePath = path.join(__dirname, "uploads", filename);
 
         // Save File
         fs.writeFileSync(filePath, imageBuffer);
 
-        // Save DB Entry linked to this Goat
+        // Save DB Entry
         const newImage = new Image({
           goatId: goat._id,
           filename: filename,
@@ -166,7 +170,7 @@ app.post("/add-goat", async (req, res) => {
       });
 
       await Promise.all(imagePromises);
-      console.log("✅ New images linked to goat.");
+      console.log("✅ New images saved.");
     }
 
     res.status(200).json({ 
