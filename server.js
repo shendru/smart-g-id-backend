@@ -3,8 +3,8 @@ const mongoose = require("mongoose");
 const multer = require("multer");
 const fs = require("fs");
 const path = require("path");
-const cors = require("cors"); // 1. Allow Frontend connection
-const bcrypt = require("bcryptjs"); // 2. Password Encryption
+const cors = require("cors"); 
+const bcrypt = require("bcryptjs"); 
 
 require("dotenv").config();
 
@@ -17,19 +17,25 @@ const app = express();
 const PORT = 5000;
 
 // --- MIDDLEWARE --- //
-app.use(cors()); // Allows React to communicate with this Backend
-app.use(express.json());
+app.use(cors()); 
+// INCREASED LIMIT: Base64 images are large, so we need to allow bigger JSON bodies
+app.use(express.json({ limit: '50mb' })); 
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
 app.use("/uploads", express.static("uploads"));
 
+// --- DATABASE CONNECTION --- //
 const mongoString = process.env.MONGO_URI;
+console.log("⏳ Connecting to MongoDB..."); 
 
 mongoose
   .connect(mongoString)
   .then(() => console.log("✅ Connected to MongoDB Cloud (Atlas)!"))
-  .catch((err) => console.log("❌ Cloud Connection Error:", err));
+  .catch((err) => console.error("❌ Cloud Connection Error:", err));
 
 // --- MULTER CONFIG --- //
+// Ensure uploads folder exists
 if (!fs.existsSync("./uploads")) {
+  console.log("📁 'uploads' folder not found, creating it..."); 
   fs.mkdirSync("./uploads");
 }
 
@@ -38,7 +44,8 @@ const storage = multer.diskStorage({
     cb(null, "uploads/");
   },
   filename: (req, file, cb) => {
-    cb(null, Date.now() + "_" + file.originalname);
+    const filename = Date.now() + "_" + file.originalname;
+    cb(null, filename);
   },
 });
 const upload = multer({ storage: storage });
@@ -49,8 +56,10 @@ app.get("/", (req, res) => {
   res.send("Backend is successfully running!");
 });
 
-// A. REGISTER USER (SECURE VERSION)
+// A. REGISTER USER
 app.post("/register", async (req, res) => {
+  console.log("\n--- REGISTER REQUEST RECEIVED ---"); 
+
   try {
     const { email, password, farmName, address } = req.body;
 
@@ -60,7 +69,7 @@ app.post("/register", async (req, res) => {
       return res.status(400).json({ error: "Email already in use." });
     }
 
-    // 2. Hash the password (Security Best Practice)
+    // 2. Hash the password
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(password, salt);
 
@@ -69,71 +78,127 @@ app.post("/register", async (req, res) => {
       email,
       farmName,
       address,
-      password: hashedPassword, // Save the HASH, not the plain text
+      password: hashedPassword, 
     });
 
     await newUser.save();
+    console.log("✅ User saved successfully!"); 
 
-    // 4. Remove password from the response data
     const userResponse = newUser.toObject();
     delete userResponse.password;
 
     res.status(201).json(userResponse);
   } catch (err) {
-    console.error(err);
+    console.error("❌ Registration Error:", err); 
     res.status(500).json({ error: "Server Error during registration." });
   }
 });
 
-// B. LOGIN (You will need this next)
+// B. LOGIN
 app.post("/login", async (req, res) => {
+    console.log("\n--- LOGIN REQUEST RECEIVED ---"); 
+
     try {
         const { email, password } = req.body;
 
-        // 1. Find User
         const user = await User.findOne({ email });
-        if (!user) return res.status(400).json({ error: "User not found" });
+        if (!user) {
+            return res.status(400).json({ error: "User not found" });
+        }
 
-        // 2. Compare Password
         const isMatch = await bcrypt.compare(password, user.password);
-        if (!isMatch) return res.status(400).json({ error: "Invalid credentials" });
+        if (!isMatch) {
+            return res.status(400).json({ error: "Invalid credentials" });
+        }
 
-        // 3. Success (Return basic info, omit password)
+        console.log("✅ Login Successful!"); 
         const userResponse = user.toObject();
         delete userResponse.password;
         
         res.json({ status: "ok", user: userResponse });
 
     } catch (err) {
+        console.error("❌ Login Error:", err); 
         res.status(500).json({ error: err.message });
     }
 });
 
-// C. ADD GOAT
+// C. ADD GOAT (THE BIG UPDATE)
+// This now handles Data + Base64 Images together
 app.post("/add-goat", async (req, res) => {
-  try {
-    const newGoat = new Goat(req.body);
-    await newGoat.save();
-    res.status(201).json(newGoat);
-  } catch (err) {
-    res.status(400).json({ error: err.message });
-  }
-});
+  console.log("\n--- ADD GOAT REQUEST ---");
 
-// D. UPLOAD IMAGE
-app.post("/upload", upload.single("imageFile"), async (req, res) => {
   try {
-    const newImage = new Image({
-      filename: req.file.filename,
-      imageUrl: `http://localhost:${PORT}/uploads/${req.file.filename}`,
-      goatId: req.body.goatId || null,
+    // 1. Extract Data
+    const { 
+      owner, rfidTag, name, gender, breed, birthDate, 
+      weight, height, healthStatus, 
+      photos // Array of Base64 strings
+    } = req.body;
+
+    console.log(`📦 Registering: ${name} (${rfidTag})`);
+
+    // 2. Create Goat Document
+    const newGoat = new Goat({
+      owner,
+      rfidTag,
+      name,
+      gender,
+      breed,
+      birthDate,
+      weight,
+      height,
+      healthStatus
     });
 
-    await newImage.save();
-    res.status(201).send("Image Uploaded and Saved to DB");
+    const savedGoat = await newGoat.save();
+    console.log(`✅ Goat Saved! ID: ${savedGoat._id}`);
+
+    // 3. Process Images (Convert Base64 -> File -> DB Entry)
+    if (photos && photos.length > 0) {
+      console.log(`📸 Processing ${photos.length} images...`);
+      
+      const imagePromises = photos.map(async (base64String, index) => {
+        // Remove header "data:image/jpeg;base64,"
+        const matches = base64String.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
+        
+        if (!matches || matches.length !== 3) {
+          console.warn(`⚠️ Skipping invalid image at index ${index}`);
+          return null;
+        }
+
+        const imageBuffer = Buffer.from(matches[2], 'base64');
+        const filename = `${Date.now()}_${savedGoat._id}_angle${index + 1}.jpg`;
+        const filePath = path.join(__dirname, "uploads", filename);
+
+        // Save to Disk
+        fs.writeFileSync(filePath, imageBuffer);
+        console.log(`💾 Saved file: ${filename}`);
+
+        // Save to DB (Image Model)
+        const newImage = new Image({
+          goatId: savedGoat._id,
+          filename: filename,
+          imageUrl: `http://localhost:${PORT}/uploads/${filename}`,
+          angle: `Angle ${index + 1}`
+        });
+
+        return newImage.save();
+      });
+
+      await Promise.all(imagePromises);
+      console.log("✅ All Images Linked & Saved!");
+    }
+
+    res.status(201).json({ 
+        status: "ok", 
+        message: "Goat registered successfully!", 
+        goat: savedGoat 
+    });
+
   } catch (err) {
-    console.log(err);
-    res.status(500).send("Error uploading image");
+    console.error("❌ Error adding goat:", err); 
+    res.status(500).json({ error: err.message });
   }
 });
 
