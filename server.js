@@ -196,6 +196,29 @@ app.get("/get-goats/:userId", async (req, res) => {
   }
 });
 
+app.get("/get-goat/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    // 1. Get Goat Details
+    const goat = await Goat.findById(id);
+    if (!goat) return res.status(404).json({ error: "Goat not found" });
+
+    // 2. Get Related Images
+    const images = await Image.find({ goatId: id });
+
+    // 3. Combine
+    const profileData = {
+        ...goat.toObject(),
+        images: images.map(img => img.imageUrl) // or img.imageBase64 if using that method
+    };
+
+    res.json(profileData);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`🚀 Server started on port ${PORT}`);
 });
