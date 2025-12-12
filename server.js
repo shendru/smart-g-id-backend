@@ -18,12 +18,12 @@ const PORT = 5000;
 
 // --- MIDDLEWARE --- //
 app.use(cors()); 
-// INCREASED LIMIT: Base64 images are large, so we need to allow bigger JSON bodies
+// Limit increased to 50mb to handle the 4 incoming Base64 images
 app.use(express.json({ limit: '50mb' })); 
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 app.use("/uploads", express.static("uploads"));
 
-// --- DATABASE CONNECTION --- //
+// --- DATABASE --- //
 const mongoString = process.env.MONGO_URI;
 console.log("⏳ Connecting to MongoDB..."); 
 
@@ -32,10 +32,8 @@ mongoose
   .then(() => console.log("✅ Connected to MongoDB Cloud (Atlas)!"))
   .catch((err) => console.error("❌ Cloud Connection Error:", err));
 
-// --- MULTER CONFIG --- //
-// Ensure uploads folder exists
+// --- MULTER SETUP --- //
 if (!fs.existsSync("./uploads")) {
-  console.log("📁 'uploads' folder not found, creating it..."); 
   fs.mkdirSync("./uploads");
 }
 
@@ -44,8 +42,7 @@ const storage = multer.diskStorage({
     cb(null, "uploads/");
   },
   filename: (req, file, cb) => {
-    const filename = Date.now() + "_" + file.originalname;
-    cb(null, filename);
+    cb(null, Date.now() + "_" + file.originalname);
   },
 });
 const upload = multer({ storage: storage });
@@ -53,148 +50,110 @@ const upload = multer({ storage: storage });
 // --- ROUTES --- //
 
 app.get("/", (req, res) => {
-  res.send("Backend is successfully running!");
+  res.send("Backend is running!");
 });
 
-// A. REGISTER USER
+// A. REGISTER
 app.post("/register", async (req, res) => {
-  console.log("\n--- REGISTER REQUEST RECEIVED ---"); 
-
   try {
     const { email, password, farmName, address } = req.body;
 
-    // 1. Check if user already exists
     const existingUser = await User.findOne({ email });
-    if (existingUser) {
-      return res.status(400).json({ error: "Email already in use." });
-    }
+    if (existingUser) return res.status(400).json({ error: "Email already exists." });
 
-    // 2. Hash the password
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(password, salt);
 
-    // 3. Create the new user
-    const newUser = new User({
-      email,
-      farmName,
-      address,
-      password: hashedPassword, 
-    });
-
+    const newUser = new User({ email, farmName, address, password: hashedPassword });
     await newUser.save();
-    console.log("✅ User saved successfully!"); 
 
     const userResponse = newUser.toObject();
     delete userResponse.password;
 
     res.status(201).json(userResponse);
   } catch (err) {
-    console.error("❌ Registration Error:", err); 
-    res.status(500).json({ error: "Server Error during registration." });
+    console.error("❌ Registration Error:", err);
+    res.status(500).json({ error: "Server error." });
   }
 });
 
 // B. LOGIN
 app.post("/login", async (req, res) => {
-    console.log("\n--- LOGIN REQUEST RECEIVED ---"); 
-
     try {
         const { email, password } = req.body;
-
         const user = await User.findOne({ email });
-        if (!user) {
-            return res.status(400).json({ error: "User not found" });
-        }
+        
+        if (!user) return res.status(400).json({ error: "User not found" });
 
         const isMatch = await bcrypt.compare(password, user.password);
-        if (!isMatch) {
-            return res.status(400).json({ error: "Invalid credentials" });
-        }
+        if (!isMatch) return res.status(400).json({ error: "Invalid credentials" });
 
-        console.log("✅ Login Successful!"); 
         const userResponse = user.toObject();
         delete userResponse.password;
         
         res.json({ status: "ok", user: userResponse });
-
     } catch (err) {
-        console.error("❌ Login Error:", err); 
+        console.error("❌ Login Error:", err);
         res.status(500).json({ error: err.message });
     }
 });
 
-// C. ADD GOAT (THE BIG UPDATE)
-// This now handles Data + Base64 Images together
+// C. ADD GOAT (Complex Route: Data + Images)
 app.post("/add-goat", async (req, res) => {
   console.log("\n--- ADD GOAT REQUEST ---");
 
   try {
-    // 1. Extract Data
+    // 1. Extract Goat Data + Photos Array
     const { 
       owner, rfidTag, name, gender, breed, birthDate, 
       weight, height, healthStatus, 
-      photos // Array of Base64 strings
+      photos // Array of Base64 strings from React
     } = req.body;
 
     console.log(`📦 Registering: ${name} (${rfidTag})`);
 
-    // 2. Create Goat Document
+    // 2. Save Goat Info First
     const newGoat = new Goat({
-      owner,
-      rfidTag,
-      name,
-      gender,
-      breed,
-      birthDate,
-      weight,
-      height,
-      healthStatus
+      owner, rfidTag, name, gender, breed, birthDate, 
+      weight, height, healthStatus
     });
 
     const savedGoat = await newGoat.save();
     console.log(`✅ Goat Saved! ID: ${savedGoat._id}`);
 
-    // 3. Process Images (Convert Base64 -> File -> DB Entry)
+    // 3. Process & Save Images (Convert Base64 -> File -> DB)
     if (photos && photos.length > 0) {
       console.log(`📸 Processing ${photos.length} images...`);
       
       const imagePromises = photos.map(async (base64String, index) => {
-        // Remove header "data:image/jpeg;base64,"
+        // Strip header if present
         const matches = base64String.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
         
-        if (!matches || matches.length !== 3) {
-          console.warn(`⚠️ Skipping invalid image at index ${index}`);
-          return null;
-        }
+        if (!matches || matches.length !== 3) return null;
 
         const imageBuffer = Buffer.from(matches[2], 'base64');
-        const filename = `${Date.now()}_${savedGoat._id}_angle${index + 1}.jpg`;
+        const filename = `${Date.now()}_${savedGoat._id}_img${index}.jpg`;
         const filePath = path.join(__dirname, "uploads", filename);
 
-        // Save to Disk
+        // Save File to Disk
         fs.writeFileSync(filePath, imageBuffer);
-        console.log(`💾 Saved file: ${filename}`);
 
-        // Save to DB (Image Model)
+        // Save Record to DB
         const newImage = new Image({
           goatId: savedGoat._id,
           filename: filename,
-          imageUrl: `http://localhost:${PORT}/uploads/${filename}`,
-          angle: `Angle ${index + 1}`
+          imageUrl: `http://localhost:${PORT}/uploads/${filename}`
+          // Removed 'angle' since your model doesn't use it
         });
 
         return newImage.save();
       });
 
       await Promise.all(imagePromises);
-      console.log("✅ All Images Linked & Saved!");
+      console.log("✅ Images saved to disk & DB.");
     }
 
-    res.status(201).json({ 
-        status: "ok", 
-        message: "Goat registered successfully!", 
-        goat: savedGoat 
-    });
+    res.status(201).json({ status: "ok", goat: savedGoat });
 
   } catch (err) {
     console.error("❌ Error adding goat:", err); 
@@ -202,39 +161,29 @@ app.post("/add-goat", async (req, res) => {
   }
 });
 
+// D. GET GOATS (With Image Lookup)
 app.get("/get-goats/:userId", async (req, res) => {
-  console.log("\n--- GET GOATS REQUEST ---");
-
   try {
     const { userId } = req.params;
-    console.log(`🔍 Fetching herd for Owner ID: ${userId}`);
+    console.log(`🔍 Fetching goats for: ${userId}`);
 
-    // Aggregate: Join Goats with Images
     const goats = await Goat.aggregate([
-      // 1. Match goats belonging to this user
       { $match: { owner: new mongoose.Types.ObjectId(userId) } },
-      
-      // 2. Sort by newest first
       { $sort: { addedAt: -1 } },
-
-      // 3. Lookup: Go to "images" collection, find images where local "_id" matches foreign "goatId"
       {
         $lookup: {
-          from: "images", // The collection name in MongoDB (usually lowercase plural of model)
+          from: "images",
           localField: "_id",
           foreignField: "goatId",
-          as: "goatImages" // The result array
+          as: "goatImages"
         }
       },
-
-      // 4. Add a field called 'mainPhoto' that takes the first image from the array (if any)
       {
         $addFields: {
-          mainPhoto: { $arrayElemAt: ["$goatImages.imageUrl", 0] } // Get URL of first image
+          // Get the URL of the first image found
+          mainPhoto: { $arrayElemAt: ["$goatImages.imageUrl", 0] } 
         }
       },
-
-      // 5. Cleanup: Remove the heavy array of all images to keep payload light
       { $project: { goatImages: 0 } }
     ]);
     
