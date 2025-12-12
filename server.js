@@ -98,65 +98,85 @@ app.post("/login", async (req, res) => {
     }
 });
 
-// C. ADD GOAT (Complex Route: Data + Images)
 app.post("/add-goat", async (req, res) => {
-  console.log("\n--- ADD GOAT REQUEST ---");
+  console.log("\n--- ADD/UPDATE GOAT REQUEST ---");
 
   try {
-    // 1. Extract Goat Data + Photos Array
     const { 
       owner, rfidTag, name, gender, breed, birthDate, 
       weight, height, healthStatus, 
-      photos // Array of Base64 strings from React
+      photos // Array of Base64 strings
     } = req.body;
 
-    console.log(`📦 Registering: ${name} (${rfidTag})`);
+    console.log(`📦 Processing: ${name} (${rfidTag})`);
 
-    // 2. Save Goat Info First
-    const newGoat = new Goat({
-      owner, rfidTag, name, gender, breed, birthDate, 
-      weight, height, healthStatus
-    });
+    // 1. FIND & UPDATE (or CREATE if not exists)
+    // We search by 'rfidTag'. If found, we update the fields. If not, we create it.
+    const goat = await Goat.findOneAndUpdate(
+      { rfidTag: rfidTag }, // Search Query
+      {
+        $set: {
+          owner,        // Updates owner (useful if ownership changes)
+          name,
+          gender,
+          breed,
+          birthDate,
+          weight,       // Updates to latest weight
+          height,       // Updates to latest height
+          healthStatus, // Updates health tags
+          addedAt: Date.now() // Optional: Update timestamp to show "Last Modified"
+        }
+      },
+      { 
+        new: true,              // Return the updated document, not the old one
+        upsert: true,           // Create if it doesn't exist
+        setDefaultsOnInsert: true // Apply schema defaults (like default healthStatus)
+      }
+    );
 
-    const savedGoat = await newGoat.save();
-    console.log(`✅ Goat Saved! ID: ${savedGoat._id}`);
+    console.log(`✅ Goat Processed! ID: ${goat._id}`);
 
-    // 3. Process & Save Images (Convert Base64 -> File -> DB)
+    // 2. Process Images (Always ADD new images, never delete old ones)
+    // This allows you to build a history of photos over time.
     if (photos && photos.length > 0) {
-      console.log(`📸 Processing ${photos.length} images...`);
+      console.log(`📸 Saving ${photos.length} new images...`);
       
       const imagePromises = photos.map(async (base64String, index) => {
-        // Strip header if present
+        // Strip header
         const matches = base64String.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
         
         if (!matches || matches.length !== 3) return null;
 
         const imageBuffer = Buffer.from(matches[2], 'base64');
-        const filename = `${Date.now()}_${savedGoat._id}_img${index}.jpg`;
+        // Unique filename: Timestamp + GoatID + Index
+        const filename = `${Date.now()}_${goat._id}_img${index}.jpg`;
         const filePath = path.join(__dirname, "uploads", filename);
 
-        // Save File to Disk
+        // Save File
         fs.writeFileSync(filePath, imageBuffer);
 
-        // Save Record to DB
+        // Save DB Entry linked to this Goat
         const newImage = new Image({
-          goatId: savedGoat._id,
+          goatId: goat._id,
           filename: filename,
           imageUrl: `http://localhost:${PORT}/uploads/${filename}`
-          // Removed 'angle' since your model doesn't use it
         });
 
         return newImage.save();
       });
 
       await Promise.all(imagePromises);
-      console.log("✅ Images saved to disk & DB.");
+      console.log("✅ New images linked to goat.");
     }
 
-    res.status(201).json({ status: "ok", goat: savedGoat });
+    res.status(200).json({ 
+        status: "ok", 
+        message: "Goat record updated successfully!", 
+        goat: goat 
+    });
 
   } catch (err) {
-    console.error("❌ Error adding goat:", err); 
+    console.error("❌ Error processing goat:", err); 
     res.status(500).json({ error: err.message });
   }
 });
