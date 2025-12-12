@@ -202,6 +202,21 @@ app.post("/add-goat", async (req, res) => {
   }
 });
 
+app.get("/get-goats/:userId", async (req, res) => {
+  try {
+    const { userId } = req.params;
+    // Find goats belonging to this user, sort by newest first
+    const goats = await Goat.find({ owner: userId }).sort({ addedAt: -1 });
+    
+    // Optional: You might want to fetch the "main photo" for each goat here too
+    // For now, we will just return the goat data
+    res.status(200).json(goats);
+  } catch (err) {
+    console.error("❌ Error fetching goats:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`🚀 Server started on port ${PORT}`);
 });
