@@ -3,10 +3,12 @@ const mongoose = require("mongoose");
 const multer = require("multer");
 const fs = require("fs");
 const path = require("path");
+const cors = require("cors"); // 1. Allow Frontend connection
+const bcrypt = require("bcryptjs"); // 2. Password Encryption
 
 require("dotenv").config();
 
-// --- MI MODELS --- //
+// --- MODELS --- //
 const User = require("./models/User");
 const Goat = require("./models/Goat");
 const Image = require("./models/Image");
@@ -14,8 +16,10 @@ const Image = require("./models/Image");
 const app = express();
 const PORT = 5000;
 
+// --- MIDDLEWARE --- //
+app.use(cors()); // Allows React to communicate with this Backend
 app.use(express.json());
-app.use("/uploads", express.static("uploads")); // Allows you to view images in the browser
+app.use("/uploads", express.static("uploads"));
 
 const mongoString = process.env.MONGO_URI;
 
@@ -24,8 +28,7 @@ mongoose
   .then(() => console.log("✅ Connected to MongoDB Cloud (Atlas)!"))
   .catch((err) => console.log("❌ Cloud Connection Error:", err));
 
-// --- 4. MULTER CONFIG (Image Storage) ---
-// Ensure uploads folder exists
+// --- MULTER CONFIG --- //
 if (!fs.existsSync("./uploads")) {
   fs.mkdirSync("./uploads");
 }
@@ -35,30 +38,78 @@ const storage = multer.diskStorage({
     cb(null, "uploads/");
   },
   filename: (req, file, cb) => {
-    // Save file as "timestamp_filename.jpg"
     cb(null, Date.now() + "_" + file.originalname);
   },
 });
 const upload = multer({ storage: storage });
 
-// --- ROUTES (The API Endpoints) ---
+// --- ROUTES --- //
 
 app.get("/", (req, res) => {
   res.send("Backend is successfully running!");
 });
 
-// A. Create a New User (Farmer)
+// A. REGISTER USER (SECURE VERSION)
 app.post("/register", async (req, res) => {
   try {
-    const newUser = new User(req.body); // Create user from the data sent
+    const { email, password, farmName, address } = req.body;
+
+    // 1. Check if user already exists
+    const existingUser = await User.findOne({ email });
+    if (existingUser) {
+      return res.status(400).json({ error: "Email already in use." });
+    }
+
+    // 2. Hash the password (Security Best Practice)
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(password, salt);
+
+    // 3. Create the new user
+    const newUser = new User({
+      email,
+      farmName,
+      address,
+      password: hashedPassword, // Save the HASH, not the plain text
+    });
+
     await newUser.save();
-    res.status(201).json(newUser);
+
+    // 4. Remove password from the response data
+    const userResponse = newUser.toObject();
+    delete userResponse.password;
+
+    res.status(201).json(userResponse);
   } catch (err) {
-    res.status(400).json({ error: err.message });
+    console.error(err);
+    res.status(500).json({ error: "Server Error during registration." });
   }
 });
 
-// B. Add a New Goat
+// B. LOGIN (You will need this next)
+app.post("/login", async (req, res) => {
+    try {
+        const { email, password } = req.body;
+
+        // 1. Find User
+        const user = await User.findOne({ email });
+        if (!user) return res.status(400).json({ error: "User not found" });
+
+        // 2. Compare Password
+        const isMatch = await bcrypt.compare(password, user.password);
+        if (!isMatch) return res.status(400).json({ error: "Invalid credentials" });
+
+        // 3. Success (Return basic info, omit password)
+        const userResponse = user.toObject();
+        delete userResponse.password;
+        
+        res.json({ status: "ok", user: userResponse });
+
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// C. ADD GOAT
 app.post("/add-goat", async (req, res) => {
   try {
     const newGoat = new Goat(req.body);
@@ -69,15 +120,13 @@ app.post("/add-goat", async (req, res) => {
   }
 });
 
-// C. Upload Image for a Goat
+// D. UPLOAD IMAGE
 app.post("/upload", upload.single("imageFile"), async (req, res) => {
   try {
-    // We expect the ESP32 or Frontend to send the 'goatId' along with the image
-    // If testing with HTML, we might not have goatId yet, so we make it optional in code
     const newImage = new Image({
       filename: req.file.filename,
       imageUrl: `http://localhost:${PORT}/uploads/${req.file.filename}`,
-      goatId: req.body.goatId || null, // Link to goat if ID is provided
+      goatId: req.body.goatId || null,
     });
 
     await newImage.save();
@@ -91,5 +140,3 @@ app.post("/upload", upload.single("imageFile"), async (req, res) => {
 app.listen(PORT, () => {
   console.log(`🚀 Server started on port ${PORT}`);
 });
-
-//693aaf8eeec4fad6ffb3e527
