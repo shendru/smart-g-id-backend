@@ -257,6 +257,109 @@ app.get("/get-goat/:id", async (req, res) => {
   }
 });
 
+// E. UPDATE GOAT (Partial Update for Marketplace)
+// This supports sending just { price: 500, isForSale: true }
+app.put("/update-goat/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    // { new: true } returns the updated document so the UI updates instantly
+    const updatedGoat = await Goat.findByIdAndUpdate(
+      id, 
+      req.body, 
+      { new: true }
+    );
+
+    if (!updatedGoat) {
+      return res.status(404).json({ error: "Goat not found" });
+    }
+
+    res.json(updatedGoat);
+  } catch (err) {
+    console.error("❌ Update Error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// F. GET ALL MARKETPLACE GOATS (Public Feed)
+app.get("/api/goats", async (req, res) => {
+  try {
+    const goats = await Goat.aggregate([
+      // 1. FILTER: Only show goats for sale
+      { $match: { isForSale: true } },
+
+      // 2. SORT: Newest listed first
+      { $sort: { listedAt: -1 } },
+
+      // === FIX STARTS HERE ===
+      // 3. CONVERT ID: Ensure 'owner' is treated as an ObjectId so Lookup works
+      {
+        $addFields: {
+          ownerObjectId: { $toObjectId: "$owner" }
+        }
+      },
+
+      // 4. LOOKUP USER: Match the converted ID
+      {
+        $lookup: {
+          from: "users",
+          localField: "ownerObjectId", // Use the converted ID
+          foreignField: "_id",
+          as: "ownerData"
+        }
+      },
+      // === FIX ENDS HERE ===
+
+      // 5. LOOKUP IMAGES
+      {
+        $lookup: {
+          from: "images",
+          localField: "_id",
+          foreignField: "goatId",
+          as: "goatImages"
+        }
+      },
+
+      // 6. FORMAT DATA
+      {
+        $addFields: {
+          mainPhoto: { $arrayElemAt: ["$goatImages.imageUrl", 0] },
+          // Extract the address we just found
+          ownerAddress: { $arrayElemAt: ["$ownerData.address", 0] },
+          // Optional: Extract Farm Name too
+          farmName: { $arrayElemAt: ["$ownerData.farmName", 0] }
+        }
+      },
+
+      // 7. CLEANUP
+      { $project: { goatImages: 0, ownerData: 0, ownerObjectId: 0 } }
+    ]);
+
+    res.status(200).json(goats);
+  } catch (err) {
+    console.error("❌ Marketplace Error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// G. DELETE GOAT
+app.delete("/delete-goat/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    // 1. Delete the Goat Record
+    await Goat.findByIdAndDelete(id);
+    
+    // 2. Delete associated Images from DB
+    // (Optional: You could also delete the actual files from /uploads here if you want to be clean)
+    await Image.deleteMany({ goatId: id });
+
+    res.json({ message: "Goat deleted successfully" });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`🚀 Server started on port ${PORT}`);
 });
