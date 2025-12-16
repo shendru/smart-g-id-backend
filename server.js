@@ -240,32 +240,90 @@ app.get("/get-goats/:userId", async (req, res) => {
 app.get("/get-goat/:id", async (req, res) => {
   try {
     const { id } = req.params;
-    
-    // 1. Fetch Goat
-    const goat = await Goat.findById(id);
-    if (!goat) return res.status(404).json({ error: "Goat not found" });
 
-    // 2. Fetch Images
-    const images = await Image.find({ goatId: id });
+    // Validate ID format to prevent crashes
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(404).json({ error: "Invalid Goat ID" });
+    }
 
-    // 3. === NEW: Fetch Owner Details ===
-    // We search for the User who matches the goat's owner ID
-    const owner = await User.findById(goat.owner);
+    const goats = await Goat.aggregate([
+      // 1. MATCH: Find the specific goat by ID
+      // We must cast the string 'id' to a real ObjectId for aggregation to work
+      { $match: { _id: new mongoose.Types.ObjectId(id) } },
 
-    // 4. Combine Data
-    const profileData = {
-      ...goat.toObject(),
-      images: images.map(img => img.imageUrl),
-      // Add safe owner details (exclude password, etc.)
-      ownerDetails: owner ? {
-        farmName: owner.farmName,
-        address: owner.address,
-        email: owner.email
-      } : null
-    };
+      // 2. CONVERT ID: Fix the 'owner' string vs ObjectId mismatch
+      {
+        $addFields: {
+          ownerObjectId: { $toObjectId: "$owner" }
+        }
+      },
 
-    res.json(profileData);
+      // 3. LOOKUP OWNER: Get farm details from Users collection
+      {
+        $lookup: {
+          from: "users",
+          localField: "ownerObjectId",
+          foreignField: "_id",
+          as: "ownerData"
+        }
+      },
+
+      // 4. LOOKUP IMAGES: Get all images for this goat
+      {
+        $lookup: {
+          from: "images",
+          localField: "_id",
+          foreignField: "goatId", // Matches the 'goatId' field in your Image schema
+          as: "goatImages"
+        }
+      },
+
+      // 5. FORMAT DATA
+      {
+        $project: {
+          // Include all Goat fields you need
+          name: 1,
+          breed: 1,
+          price: 1,
+          gender: 1,
+          weight: 1,
+          height: 1,
+          birthDate: 1,
+          listedAt: 1,
+          healthStatus: 1,
+          rfidTag: 1,
+          isForSale: 1,
+          description: 1, // Include if you have it
+
+          // Transform Images: Convert array of objects -> array of URL strings
+          images: {
+            $map: {
+              input: "$goatImages",
+              as: "img",
+              in: "$$img.imageUrl"
+            }
+          },
+
+          // Create the ownerDetails object (taking the first match from the array)
+          ownerDetails: {
+            farmName: { $arrayElemAt: ["$ownerData.farmName", 0] },
+            address: { $arrayElemAt: ["$ownerData.address", 0] },
+            email: { $arrayElemAt: ["$ownerData.email", 0] }
+          }
+        }
+      }
+    ]);
+
+    // Check if goat was found
+    if (!goats || goats.length === 0) {
+      return res.status(404).json({ error: "Goat not found" });
+    }
+
+    // Return the single object (goats[0]), not the array
+    res.json(goats[0]);
+
   } catch (err) {
+    console.error("❌ Get-Goat Error:", err);
     res.status(500).json({ error: err.message });
   }
 });
