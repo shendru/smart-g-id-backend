@@ -240,15 +240,28 @@ app.get("/get-goats/:userId", async (req, res) => {
 app.get("/get-goat/:id", async (req, res) => {
   try {
     const { id } = req.params;
+    
+    // 1. Fetch Goat
     const goat = await Goat.findById(id);
     if (!goat) return res.status(404).json({ error: "Goat not found" });
 
+    // 2. Fetch Images
     const images = await Image.find({ goatId: id });
 
+    // 3. === NEW: Fetch Owner Details ===
+    // We search for the User who matches the goat's owner ID
+    const owner = await User.findById(goat.owner);
+
+    // 4. Combine Data
     const profileData = {
-        ...goat.toObject(),
-        // Returns "uploads/1234.jpg"
-        images: images.map(img => img.imageUrl) 
+      ...goat.toObject(),
+      images: images.map(img => img.imageUrl),
+      // Add safe owner details (exclude password, etc.)
+      ownerDetails: owner ? {
+        farmName: owner.farmName,
+        address: owner.address,
+        email: owner.email
+      } : null
     };
 
     res.json(profileData);
