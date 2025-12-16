@@ -52,6 +52,23 @@ const GoatSchema = new mongoose.Schema({
     default: ["Healthy"],
   },
 
+  // 6. Marketplace Data (New Fields)
+  price: {
+    type: Number,
+    required: false, // Not required
+    default: 0,      // Defaults to 0 if not set
+  },
+  isForSale: {
+    type: Boolean,
+    required: false,
+    default: false,  // Defaults to "Not for sale"
+  },
+  isSold: {
+    type: Boolean,
+    required: false,
+    default: false,  // Defaults to "Not sold"
+  },
+
   addedAt: {
     type: Date,
     default: Date.now,
