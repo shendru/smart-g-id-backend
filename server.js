@@ -431,6 +431,87 @@ app.delete("/delete-goat/:id", async (req, res) => {
   }
 });
 
+app.get("/api/farms", async (req, res) => {
+  try {
+    // Fetch users (you might want to filter by role: 'breeder' or 'farmer' if you have that field)
+    const farms = await User.find({})
+      .select("farmName address email _id profileImage") // Only select public info
+      .lean();
+
+    res.json(farms);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/api/goats", async (req, res) => {
+  try {
+    const goats = await Goat.aggregate([
+      // 1. FILTER: Only show goats that are marked for sale
+      { $match: { isForSale: true } },
+
+      // 2. SORT: Newest listed first
+      { $sort: { listedAt: -1 } },
+
+      // 3. CONVERT OWNER ID: 
+      // The 'owner' field in Goat is likely a String, but we need an ObjectId for lookup
+      {
+        $addFields: {
+          ownerObjectId: { $toObjectId: "$owner" }
+        }
+      },
+
+      // 4. LOOKUP OWNER (USER): Match the converted ID to the User collection
+      {
+        $lookup: {
+          from: "users",
+          localField: "ownerObjectId",
+          foreignField: "_id",
+          as: "ownerData"
+        }
+      },
+
+      // 5. LOOKUP IMAGES: Get images linked to this goat
+      {
+        $lookup: {
+          from: "images",
+          localField: "_id",
+          foreignField: "goatId",
+          as: "goatImages"
+        }
+      },
+
+      // 6. FORMAT OUTPUT: Shape the data for the frontend
+      {
+        $addFields: {
+          // Get the first image as the main photo
+          mainPhoto: { $arrayElemAt: ["$goatImages.imageUrl", 0] },
+          // Extract specific public fields from the owner array
+          farmName: { $arrayElemAt: ["$ownerData.farmName", 0] },
+          ownerAddress: { $arrayElemAt: ["$ownerData.address", 0] },
+          // Keep the original owner ID if needed
+          ownerId: { $toString: "$ownerObjectId" }
+        }
+      },
+
+      // 7. CLEANUP: Remove massive internal arrays to keep the response light
+      { 
+        $project: { 
+          goatImages: 0, 
+          ownerData: 0, 
+          ownerObjectId: 0,
+          __v: 0 
+        } 
+      }
+    ]);
+
+    res.status(200).json(goats);
+  } catch (err) {
+    console.error("❌ Marketplace Error:", err);
+    res.status(500).json({ error: "Failed to fetch marketplace listings" });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`🚀 Server started on port ${PORT}`);
 });
