@@ -68,7 +68,10 @@ const GoatSchema = new mongoose.Schema({
     required: false,
     default: false,  // Defaults to "Not sold"
   },
-
+  listedAt: {
+    type: Date,
+    required: false, // Optional, because not all goats are for sale
+  },
   addedAt: {
     type: Date,
     default: Date.now,
