@@ -23,6 +23,7 @@ app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
 // ✅ FIX 1: Use absolute path for static files
 // This ensures the server looks in the EXACT same folder where you saved the images
+console.log("📂 Serving static files from:", path.join(__dirname, "uploads"));
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
 // --- DATABASE --- //
