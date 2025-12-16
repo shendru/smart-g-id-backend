@@ -18,10 +18,12 @@ const PORT = 5000;
 
 // --- MIDDLEWARE --- //
 app.use(cors()); 
-// Limit increased to 50mb to handle the 4 incoming Base64 images
 app.use(express.json({ limit: '50mb' })); 
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
-app.use("/uploads", express.static("uploads"));
+
+// ✅ FIX 1: Use absolute path for static files
+// This ensures the server looks in the EXACT same folder where you saved the images
+app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
 // --- DATABASE --- //
 const mongoString = process.env.MONGO_URI;
@@ -33,8 +35,10 @@ mongoose
   .catch((err) => console.error("❌ Cloud Connection Error:", err));
 
 // --- MULTER SETUP --- //
-if (!fs.existsSync("./uploads")) {
-  fs.mkdirSync("./uploads");
+// Ensure uploads directory exists using absolute path
+const uploadDir = path.join(__dirname, "uploads");
+if (!fs.existsSync(uploadDir)) {
+  fs.mkdirSync(uploadDir);
 }
 
 const storage = multer.diskStorage({
@@ -55,9 +59,9 @@ app.get("/", (req, res) => {
 
 // A. REGISTER
 app.post("/register", async (req, res) => {
+  // ... (Your existing register logic is fine) ...
   try {
     const { email, password, farmName, address } = req.body;
-
     const existingUser = await User.findOne({ email });
     if (existingUser) return res.status(400).json({ error: "Email already exists." });
 
@@ -79,6 +83,7 @@ app.post("/register", async (req, res) => {
 
 // B. LOGIN
 app.post("/login", async (req, res) => {
+    // ... (Your existing login logic is fine) ...
     try {
         const { email, password } = req.body;
         const user = await User.findOne({ email });
@@ -98,7 +103,7 @@ app.post("/login", async (req, res) => {
     }
 });
 
-// C. ADD OR UPDATE GOAT (With Robust Cleanup)
+// C. ADD OR UPDATE GOAT
 app.post("/add-goat", async (req, res) => {
   console.log("\n--- ADD/UPDATE GOAT REQUEST ---");
 
@@ -106,13 +111,11 @@ app.post("/add-goat", async (req, res) => {
     const { 
       owner, rfidTag, name, gender, breed, birthDate, 
       weight, height, healthStatus, 
-      photos // Array of Base64 strings
+      photos 
     } = req.body;
 
     console.log(`📦 Processing: ${name} (${rfidTag})`);
 
-    // 1. FIND & UPDATE (or CREATE)
-    // We update the goat first to ensure we have the correct _id
     const goat = await Goat.findOneAndUpdate(
       { rfidTag: rfidTag }, 
       {
@@ -126,43 +129,36 @@ app.post("/add-goat", async (req, res) => {
 
     console.log(`✅ Goat ID: ${goat._id}`);
 
-    // 2. IMAGE LOGIC
+    // IMAGE LOGIC
     if (photos && photos.length > 0) {
       console.log("🔄 New photos detected. Starting cleanup sequence...");
 
-      // --- A. CLEANUP OLD IMAGES ---
+      // --- CLEANUP OLD IMAGES ---
       try {
-        // Find all images currently linked to this goat
         const oldImages = await Image.find({ goatId: goat._id });
-        console.log(`found ${oldImages.length} old images in DB.`);
-
-        // Loop through and delete files physically
+        
         for (const img of oldImages) {
+          // ✅ FIX 2: Use absolute path for deletion to match creation
           const filePath = path.join(__dirname, "uploads", img.filename);
           
           try {
             if (fs.existsSync(filePath)) {
-              fs.unlinkSync(filePath); // Delete file
+              fs.unlinkSync(filePath);
               console.log(`   🗑️ Deleted file: ${img.filename}`);
-            } else {
-              console.warn(`   ⚠️ File not found on disk (skipping): ${img.filename}`);
             }
           } catch (fileErr) {
             console.error(`   ❌ Error deleting file ${img.filename}:`, fileErr.message);
-            // We continue loop even if one file fails
           }
         }
 
-        // Delete records from MongoDB
-        const deleteResult = await Image.deleteMany({ goatId: goat._id });
-        console.log(`   ✅ Removed ${deleteResult.deletedCount} records from DB.`);
+        await Image.deleteMany({ goatId: goat._id });
+        console.log(`   ✅ Removed records from DB.`);
 
       } catch (cleanupErr) {
         console.error("❌ Critical error during cleanup:", cleanupErr);
-        // We don't stop the process, we still want to save new images
       }
 
-      // --- B. SAVE NEW IMAGES ---
+      // --- SAVE NEW IMAGES ---
       console.log(`📸 Saving ${photos.length} new images...`);
       
       const imagePromises = photos.map(async (base64String, index) => {
@@ -173,14 +169,15 @@ app.post("/add-goat", async (req, res) => {
         const filename = `${Date.now()}_${goat._id}_img${index}.jpg`;
         const filePath = path.join(__dirname, "uploads", filename);
 
-        // Save File
         fs.writeFileSync(filePath, imageBuffer);
 
-        // Save DB Entry
+        // ✅ FIX 3: Store RELATIVE URL only
+        // Instead of hardcoding 'http://localhost:5000', we just store 'uploads/filename.jpg'.
+        // This allows the frontend to decide the IP address (localhost vs 10.109...)
         const newImage = new Image({
           goatId: goat._id,
           filename: filename,
-          imageUrl: `http://localhost:${PORT}/uploads/${filename}`
+          imageUrl: `uploads/${filename}` 
         });
 
         return newImage.save();
@@ -206,8 +203,8 @@ app.post("/add-goat", async (req, res) => {
 app.get("/get-goats/:userId", async (req, res) => {
   try {
     const { userId } = req.params;
-    console.log(`🔍 Fetching goats for: ${userId}`);
-
+    
+    // We get the goats normally
     const goats = await Goat.aggregate([
       { $match: { owner: new mongoose.Types.ObjectId(userId) } },
       { $sort: { addedAt: -1 } },
@@ -221,14 +218,17 @@ app.get("/get-goats/:userId", async (req, res) => {
       },
       {
         $addFields: {
-          // Get the URL of the first image found
-          mainPhoto: { $arrayElemAt: ["$goatImages.imageUrl", 0] } 
+          // Because we changed how we save URLs, we just grab the path here
+          mainPhotoPath: { $arrayElemAt: ["$goatImages.imageUrl", 0] } 
         }
       },
       { $project: { goatImages: 0 } }
     ]);
     
-    console.log(`✅ Found ${goats.length} goats.`); 
+    // ✅ Optional: Helper to append full URL if you want backend to handle it
+    // But usually frontend handling is better for mobile apps.
+    // For now, we return the paths directly.
+    
     res.status(200).json(goats);
 
   } catch (err) {
@@ -240,18 +240,15 @@ app.get("/get-goats/:userId", async (req, res) => {
 app.get("/get-goat/:id", async (req, res) => {
   try {
     const { id } = req.params;
-    
-    // 1. Get Goat Details
     const goat = await Goat.findById(id);
     if (!goat) return res.status(404).json({ error: "Goat not found" });
 
-    // 2. Get Related Images
     const images = await Image.find({ goatId: id });
 
-    // 3. Combine
     const profileData = {
         ...goat.toObject(),
-        images: images.map(img => img.imageUrl) // or img.imageBase64 if using that method
+        // Returns "uploads/1234.jpg"
+        images: images.map(img => img.imageUrl) 
     };
 
     res.json(profileData);
