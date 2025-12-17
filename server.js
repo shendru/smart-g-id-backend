@@ -3,8 +3,8 @@ const mongoose = require("mongoose");
 const multer = require("multer");
 const fs = require("fs");
 const path = require("path");
-const cors = require("cors"); 
-const bcrypt = require("bcryptjs"); 
+const cors = require("cors");
+const bcrypt = require("bcryptjs");
 
 require("dotenv").config();
 
@@ -17,9 +17,9 @@ const app = express();
 const PORT = 5000;
 
 // --- MIDDLEWARE --- //
-app.use(cors()); 
-app.use(express.json({ limit: '50mb' })); 
-app.use(express.urlencoded({ limit: '50mb', extended: true }));
+app.use(cors());
+app.use(express.json({ limit: "50mb" }));
+app.use(express.urlencoded({ limit: "50mb", extended: true }));
 
 // ✅ FIX 1: Use absolute path for static files
 // This ensures the server looks in the EXACT same folder where you saved the images
@@ -28,7 +28,7 @@ app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
 // --- DATABASE --- //
 const mongoString = process.env.MONGO_URI;
-console.log("⏳ Connecting to MongoDB..."); 
+console.log("⏳ Connecting to MongoDB...");
 
 mongoose
   .connect(mongoString)
@@ -64,12 +64,18 @@ app.post("/register", async (req, res) => {
   try {
     const { email, password, farmName, address } = req.body;
     const existingUser = await User.findOne({ email });
-    if (existingUser) return res.status(400).json({ error: "Email already exists." });
+    if (existingUser)
+      return res.status(400).json({ error: "Email already exists." });
 
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(password, salt);
 
-    const newUser = new User({ email, farmName, address, password: hashedPassword });
+    const newUser = new User({
+      email,
+      farmName,
+      address,
+      password: hashedPassword,
+    });
     await newUser.save();
 
     const userResponse = newUser.toObject();
@@ -84,24 +90,24 @@ app.post("/register", async (req, res) => {
 
 // B. LOGIN
 app.post("/login", async (req, res) => {
-    // ... (Your existing login logic is fine) ...
-    try {
-        const { email, password } = req.body;
-        const user = await User.findOne({ email });
-        
-        if (!user) return res.status(400).json({ error: "User not found" });
+  // ... (Your existing login logic is fine) ...
+  try {
+    const { email, password } = req.body;
+    const user = await User.findOne({ email });
 
-        const isMatch = await bcrypt.compare(password, user.password);
-        if (!isMatch) return res.status(400).json({ error: "Invalid credentials" });
+    if (!user) return res.status(400).json({ error: "User not found" });
 
-        const userResponse = user.toObject();
-        delete userResponse.password;
-        
-        res.json({ status: "ok", user: userResponse });
-    } catch (err) {
-        console.error("❌ Login Error:", err);
-        res.status(500).json({ error: err.message });
-    }
+    const isMatch = await bcrypt.compare(password, user.password);
+    if (!isMatch) return res.status(400).json({ error: "Invalid credentials" });
+
+    const userResponse = user.toObject();
+    delete userResponse.password;
+
+    res.json({ status: "ok", user: userResponse });
+  } catch (err) {
+    console.error("❌ Login Error:", err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // C. ADD OR UPDATE GOAT
@@ -109,21 +115,35 @@ app.post("/add-goat", async (req, res) => {
   console.log("\n--- ADD/UPDATE GOAT REQUEST ---");
 
   try {
-    const { 
-      owner, rfidTag, name, gender, breed, birthDate, 
-      weight, height, healthStatus, 
-      photos 
+    const {
+      owner,
+      rfidTag,
+      name,
+      gender,
+      breed,
+      birthDate,
+      weight,
+      height,
+      healthStatus,
+      photos,
     } = req.body;
 
     console.log(`📦 Processing: ${name} (${rfidTag})`);
 
     const goat = await Goat.findOneAndUpdate(
-      { rfidTag: rfidTag }, 
+      { rfidTag: rfidTag },
       {
         $set: {
-          owner, name, gender, breed, birthDate, weight, height, healthStatus,
-          addedAt: Date.now() 
-        }
+          owner,
+          name,
+          gender,
+          breed,
+          birthDate,
+          weight,
+          height,
+          healthStatus,
+          addedAt: Date.now(),
+        },
       },
       { new: true, upsert: true, setDefaultsOnInsert: true }
     );
@@ -137,36 +157,40 @@ app.post("/add-goat", async (req, res) => {
       // --- CLEANUP OLD IMAGES ---
       try {
         const oldImages = await Image.find({ goatId: goat._id });
-        
+
         for (const img of oldImages) {
           // ✅ FIX 2: Use absolute path for deletion to match creation
           const filePath = path.join(__dirname, "uploads", img.filename);
-          
+
           try {
             if (fs.existsSync(filePath)) {
               fs.unlinkSync(filePath);
               console.log(`   🗑️ Deleted file: ${img.filename}`);
             }
           } catch (fileErr) {
-            console.error(`   ❌ Error deleting file ${img.filename}:`, fileErr.message);
+            console.error(
+              `   ❌ Error deleting file ${img.filename}:`,
+              fileErr.message
+            );
           }
         }
 
         await Image.deleteMany({ goatId: goat._id });
         console.log(`   ✅ Removed records from DB.`);
-
       } catch (cleanupErr) {
         console.error("❌ Critical error during cleanup:", cleanupErr);
       }
 
       // --- SAVE NEW IMAGES ---
       console.log(`📸 Saving ${photos.length} new images...`);
-      
+
       const imagePromises = photos.map(async (base64String, index) => {
-        const matches = base64String.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
+        const matches = base64String.match(
+          /^data:([A-Za-z-+\/]+);base64,(.+)$/
+        );
         if (!matches || matches.length !== 3) return null;
 
-        const imageBuffer = Buffer.from(matches[2], 'base64');
+        const imageBuffer = Buffer.from(matches[2], "base64");
         const filename = `${Date.now()}_${goat._id}_img${index}.jpg`;
         const filePath = path.join(__dirname, "uploads", filename);
 
@@ -178,7 +202,7 @@ app.post("/add-goat", async (req, res) => {
         const newImage = new Image({
           goatId: goat._id,
           filename: filename,
-          imageUrl: `uploads/${filename}` 
+          imageUrl: `uploads/${filename}`,
         });
 
         return newImage.save();
@@ -188,14 +212,13 @@ app.post("/add-goat", async (req, res) => {
       console.log("✅ New images saved successfully.");
     }
 
-    res.status(200).json({ 
-        status: "ok", 
-        message: "Goat record updated successfully!", 
-        goat: goat 
+    res.status(200).json({
+      status: "ok",
+      message: "Goat record updated successfully!",
+      goat: goat,
     });
-
   } catch (err) {
-    console.error("❌ Error processing goat:", err); 
+    console.error("❌ Error processing goat:", err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -204,7 +227,7 @@ app.post("/add-goat", async (req, res) => {
 app.get("/get-goats/:userId", async (req, res) => {
   try {
     const { userId } = req.params;
-    
+
     // We get the goats normally
     const goats = await Goat.aggregate([
       { $match: { owner: new mongoose.Types.ObjectId(userId) } },
@@ -214,24 +237,23 @@ app.get("/get-goats/:userId", async (req, res) => {
           from: "images",
           localField: "_id",
           foreignField: "goatId",
-          as: "goatImages"
-        }
+          as: "goatImages",
+        },
       },
       {
         $addFields: {
           // Because we changed how we save URLs, we just grab the path here
-          mainPhotoPath: { $arrayElemAt: ["$goatImages.imageUrl", 0] } 
-        }
+          mainPhotoPath: { $arrayElemAt: ["$goatImages.imageUrl", 0] },
+        },
       },
-      { $project: { goatImages: 0 } }
+      { $project: { goatImages: 0 } },
     ]);
-    
+
     // ✅ Optional: Helper to append full URL if you want backend to handle it
     // But usually frontend handling is better for mobile apps.
     // For now, we return the paths directly.
-    
-    res.status(200).json(goats);
 
+    res.status(200).json(goats);
   } catch (err) {
     console.error("❌ Error fetching goats:", err);
     res.status(500).json({ error: err.message });
@@ -255,8 +277,8 @@ app.get("/get-goat/:id", async (req, res) => {
       // 2. CONVERT ID: Fix the 'owner' string vs ObjectId mismatch
       {
         $addFields: {
-          ownerObjectId: { $toObjectId: "$owner" }
-        }
+          ownerObjectId: { $toObjectId: "$owner" },
+        },
       },
 
       // 3. LOOKUP OWNER: Get farm details from Users collection
@@ -265,8 +287,8 @@ app.get("/get-goat/:id", async (req, res) => {
           from: "users",
           localField: "ownerObjectId",
           foreignField: "_id",
-          as: "ownerData"
-        }
+          as: "ownerData",
+        },
       },
 
       // 4. LOOKUP IMAGES: Get all images for this goat
@@ -275,8 +297,8 @@ app.get("/get-goat/:id", async (req, res) => {
           from: "images",
           localField: "_id",
           foreignField: "goatId", // Matches the 'goatId' field in your Image schema
-          as: "goatImages"
-        }
+          as: "goatImages",
+        },
       },
 
       // 5. FORMAT DATA
@@ -301,18 +323,18 @@ app.get("/get-goat/:id", async (req, res) => {
             $map: {
               input: "$goatImages",
               as: "img",
-              in: "$$img.imageUrl"
-            }
+              in: "$$img.imageUrl",
+            },
           },
 
           // Create the ownerDetails object (taking the first match from the array)
           ownerDetails: {
             farmName: { $arrayElemAt: ["$ownerData.farmName", 0] },
             address: { $arrayElemAt: ["$ownerData.address", 0] },
-            email: { $arrayElemAt: ["$ownerData.email", 0] }
-          }
-        }
-      }
+            email: { $arrayElemAt: ["$ownerData.email", 0] },
+          },
+        },
+      },
     ]);
 
     // Check if goat was found
@@ -322,7 +344,6 @@ app.get("/get-goat/:id", async (req, res) => {
 
     // Return the single object (goats[0]), not the array
     res.json(goats[0]);
-
   } catch (err) {
     console.error("❌ Get-Goat Error:", err);
     res.status(500).json({ error: err.message });
@@ -334,13 +355,11 @@ app.get("/get-goat/:id", async (req, res) => {
 app.put("/update-goat/:id", async (req, res) => {
   try {
     const { id } = req.params;
-    
+
     // { new: true } returns the updated document so the UI updates instantly
-    const updatedGoat = await Goat.findByIdAndUpdate(
-      id, 
-      req.body, 
-      { new: true }
-    );
+    const updatedGoat = await Goat.findByIdAndUpdate(id, req.body, {
+      new: true,
+    });
 
     if (!updatedGoat) {
       return res.status(404).json({ error: "Goat not found" });
@@ -367,8 +386,8 @@ app.get("/api/goats", async (req, res) => {
       // 3. CONVERT ID: Ensure 'owner' is treated as an ObjectId so Lookup works
       {
         $addFields: {
-          ownerObjectId: { $toObjectId: "$owner" }
-        }
+          ownerObjectId: { $toObjectId: "$owner" },
+        },
       },
 
       // 4. LOOKUP USER: Match the converted ID
@@ -377,8 +396,8 @@ app.get("/api/goats", async (req, res) => {
           from: "users",
           localField: "ownerObjectId", // Use the converted ID
           foreignField: "_id",
-          as: "ownerData"
-        }
+          as: "ownerData",
+        },
       },
       // === FIX ENDS HERE ===
 
@@ -388,8 +407,8 @@ app.get("/api/goats", async (req, res) => {
           from: "images",
           localField: "_id",
           foreignField: "goatId",
-          as: "goatImages"
-        }
+          as: "goatImages",
+        },
       },
 
       // 6. FORMAT DATA
@@ -399,12 +418,12 @@ app.get("/api/goats", async (req, res) => {
           // Extract the address we just found
           ownerAddress: { $arrayElemAt: ["$ownerData.address", 0] },
           // Optional: Extract Farm Name too
-          farmName: { $arrayElemAt: ["$ownerData.farmName", 0] }
-        }
+          farmName: { $arrayElemAt: ["$ownerData.farmName", 0] },
+        },
       },
 
       // 7. CLEANUP
-      { $project: { goatImages: 0, ownerData: 0, ownerObjectId: 0 } }
+      { $project: { goatImages: 0, ownerData: 0, ownerObjectId: 0 } },
     ]);
 
     res.status(200).json(goats);
@@ -418,10 +437,10 @@ app.get("/api/goats", async (req, res) => {
 app.delete("/delete-goat/:id", async (req, res) => {
   try {
     const { id } = req.params;
-    
+
     // 1. Delete the Goat Record
     await Goat.findByIdAndDelete(id);
-    
+
     // 2. Delete associated Images from DB
     // (Optional: You could also delete the actual files from /uploads here if you want to be clean)
     await Image.deleteMany({ goatId: id });
@@ -454,12 +473,12 @@ app.get("/api/goats", async (req, res) => {
       // 2. SORT: Newest listed first
       { $sort: { listedAt: -1 } },
 
-      // 3. CONVERT OWNER ID: 
+      // 3. CONVERT OWNER ID:
       // The 'owner' field in Goat is likely a String, but we need an ObjectId for lookup
       {
         $addFields: {
-          ownerObjectId: { $toObjectId: "$owner" }
-        }
+          ownerObjectId: { $toObjectId: "$owner" },
+        },
       },
 
       // 4. LOOKUP OWNER (USER): Match the converted ID to the User collection
@@ -468,8 +487,8 @@ app.get("/api/goats", async (req, res) => {
           from: "users",
           localField: "ownerObjectId",
           foreignField: "_id",
-          as: "ownerData"
-        }
+          as: "ownerData",
+        },
       },
 
       // 5. LOOKUP IMAGES: Get images linked to this goat
@@ -478,8 +497,8 @@ app.get("/api/goats", async (req, res) => {
           from: "images",
           localField: "_id",
           foreignField: "goatId",
-          as: "goatImages"
-        }
+          as: "goatImages",
+        },
       },
 
       // 6. FORMAT OUTPUT: Shape the data for the frontend
@@ -491,25 +510,111 @@ app.get("/api/goats", async (req, res) => {
           farmName: { $arrayElemAt: ["$ownerData.farmName", 0] },
           ownerAddress: { $arrayElemAt: ["$ownerData.address", 0] },
           // Keep the original owner ID if needed
-          ownerId: { $toString: "$ownerObjectId" }
-        }
+          ownerId: { $toString: "$ownerObjectId" },
+        },
       },
 
       // 7. CLEANUP: Remove massive internal arrays to keep the response light
-      { 
-        $project: { 
-          goatImages: 0, 
-          ownerData: 0, 
+      {
+        $project: {
+          goatImages: 0,
+          ownerData: 0,
           ownerObjectId: 0,
-          __v: 0 
-        } 
-      }
+          __v: 0,
+        },
+      },
     ]);
 
     res.status(200).json(goats);
   } catch (err) {
     console.error("❌ Marketplace Error:", err);
     res.status(500).json({ error: "Failed to fetch marketplace listings" });
+  }
+});
+
+app.get("/goats", async (req, res) => {
+  try {
+    const goats = await Goat.aggregate([
+      // 1. FILTER: Only show goats that are marked for sale
+      // (Remove this block if you want to see ALL goats regardless of status)
+      { $match: { isForSale: true } },
+
+      // 2. SORT: Newest listed first
+      { $sort: { listedAt: -1 } },
+
+      // 3. LOOKUP OWNER (USER)
+      // matching "owner" in Goat to "_id" in Users
+      {
+        $lookup: {
+          from: "users",
+          localField: "owner",
+          foreignField: "_id",
+          as: "ownerData",
+        },
+      },
+
+      // 4. LOOKUP IMAGES
+      // This is the KEY FIX. It grabs images from the separate "images" collection
+      {
+        $lookup: {
+          from: "images", // Must match your MongoDB collection name for images
+          localField: "_id",
+          foreignField: "goatId",
+          as: "goatImages",
+        },
+      },
+
+      // 5. FORMAT OUTPUT
+      {
+        $addFields: {
+          // Take the first image found and make it the 'mainPhoto'
+          // ensure your Image collection has a field named 'imageUrl' or change this string
+          mainPhoto: { $arrayElemAt: ["$goatImages.imageUrl", 0] },
+
+          // Extract owner details
+          farmName: { $arrayElemAt: ["$ownerData.farmName", 0] },
+          ownerAddress: { $arrayElemAt: ["$ownerData.address", 0] },
+        },
+      },
+
+      // 6. CLEANUP (Remove heavy arrays to make response faster)
+      {
+        $project: {
+          goatImages: 0,
+          ownerData: 0,
+          __v: 0,
+        },
+      },
+    ]);
+
+    res.status(200).json(goats);
+  } catch (error) {
+    console.error("Error fetching all goats:", error);
+    res.status(500).json({ message: "Server error fetching goats" });
+  }
+});
+
+// H. GET SPECIFIC FARM (For Store Page)
+app.get("/api/farms/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Validate ID format to prevent server crash on bad URLs
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(404).json({ error: "Invalid Farm ID" });
+    }
+
+    // Find user by ID but EXCLUDE the password
+    const farm = await User.findById(id).select("-password").lean();
+
+    if (!farm) {
+      return res.status(404).json({ error: "Farm not found" });
+    }
+
+    res.json(farm);
+  } catch (err) {
+    console.error("❌ Get Farm Error:", err);
+    res.status(500).json({ error: "Server error fetching farm" });
   }
 });
 
